@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mooncoin Miner</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <h1>Mooncoin Miner <span aria-hidden="true">🚀</span></h1>
+        <p>Idle satire for the terminally overclocked. <span id="version-label"></span></p>
+      </div>
+      <div class="topbar-actions">
+        <button id="theme-button" class="button secondary">Dark Mode</button>
+        <button id="save-button" class="button secondary">Save</button>
+        <button id="reset-button" class="button danger">Reset</button>
+      </div>
+    </header>
+
+    <section class="summary-grid" id="summary-bar"></section>
+
+    <main class="dashboard-grid">
+      <div class="dashboard-column">
+        <section class="panel">
+          <div class="panel-header">
+            <div class="panel-title-group">
+              <h2>Market</h2>
+              <span class="muted panel-summary" id="market-summary"></span>
+            </div>
+            <div class="panel-header-actions">
+              <button id="sell-all-button" class="button">Sell All</button>
+              <button class="button secondary" aria-label="Toggle market panel" title="Toggle market panel" data-action="toggle-panel" data-panel="market">â–¾</button>
+            </div>
+          </div>
+          <div id="market-panel" class="table-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div class="panel-title-group">
+              <h2>Operation</h2>
+              <span class="muted panel-summary" id="operation-summary"></span>
+            </div>
+            <div class="panel-header-actions">
+              <span class="muted">Assign coins, repair failures, scale responsibly.</span>
+              <button class="button secondary" aria-label="Toggle operation panel" title="Toggle operation panel" data-action="toggle-panel" data-panel="operation">â–¾</button>
+            </div>
+          </div>
+          <div id="operation-panel" class="stack"></div>
+        </section>
+      </div>
+
+      <div class="dashboard-column">
+        <section class="panel">
+          <div class="panel-header">
+            <div class="panel-title-group">
+              <h2>Used Market</h2>
+              <span class="muted panel-summary" id="used-market-summary"></span>
+            </div>
+            <div class="panel-header-actions">
+              <span class="muted" id="used-market-timer"></span>
+              <button class="button secondary" aria-label="Toggle used market panel" title="Toggle used market panel" data-action="toggle-panel" data-panel="usedMarket">â–¾</button>
+            </div>
+          </div>
+          <div id="used-market-panel" class="stack"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div class="panel-title-group">
+              <h2>Shop</h2>
+              <span class="muted panel-summary" id="shop-summary"></span>
+            </div>
+            <div class="panel-header-actions">
+              <span class="muted">All prices in cash.</span>
+              <button class="button secondary" aria-label="Toggle shop panel" title="Toggle shop panel" data-action="toggle-panel" data-panel="shop">â–¾</button>
+            </div>
+          </div>
+          <div class="shop-section" data-shop-section="machines">
+            <div class="shop-section-header">
+              <h3>Machines</h3>
+              <button class="button secondary" aria-label="Toggle machines section" title="Toggle machines section" data-action="toggle-shop-section" data-section="machines">â–¾</button>
+            </div>
+            <div id="machine-shop" class="stack compact"></div>
+          </div>
+          <div class="shop-section" data-shop-section="components">
+            <div class="shop-section-header">
+              <h3>Components</h3>
+              <button class="button secondary" aria-label="Toggle components section" title="Toggle components section" data-action="toggle-shop-section" data-section="components">â–¾</button>
+            </div>
+            <div id="component-shop" class="stack compact"></div>
+          </div>
+          <div class="shop-section" data-shop-section="spareComponents">
+            <div class="shop-section-header">
+              <h3>Spare Components</h3>
+              <button class="button secondary" aria-label="Toggle spare components section" title="Toggle spare components section" data-action="toggle-shop-section" data-section="spareComponents">â–¾</button>
+            </div>
+            <div id="spare-component-shop" class="stack compact"></div>
+          </div>
+          <div class="shop-section" data-shop-section="facility">
+            <div class="shop-section-header">
+              <h3>Facility Upgrades</h3>
+              <button class="button secondary" aria-label="Toggle facility section" title="Toggle facility section" data-action="toggle-shop-section" data-section="facility">â–¾</button>
+            </div>
+            <div id="facility-shop" class="stack compact"></div>
+          </div>
+          <div class="shop-section" data-shop-section="solar">
+            <div class="shop-section-header">
+              <h3>Solar</h3>
+              <button class="button secondary" aria-label="Toggle solar section" title="Toggle solar section" data-action="toggle-shop-section" data-section="solar">â–¾</button>
+            </div>
+            <div id="solar-shop" class="stack compact"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div class="panel-title-group">
+              <h2>Event Log</h2>
+              <span class="muted panel-summary" id="event-log-summary"></span>
+            </div>
+            <div class="panel-header-actions">
+              <span class="muted">Recent disasters and delusions.</span>
+              <button class="button secondary" aria-label="Toggle event log panel" title="Toggle event log panel" data-action="toggle-panel" data-panel="eventLog">â–¾</button>
+            </div>
+          </div>
+          <div id="event-log-panel" class="event-log"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div class="panel-title-group">
+              <h2>Cheats</h2>
+              <span class="muted panel-summary" id="cheat-summary"></span>
+            </div>
+            <div class="panel-header-actions">
+              <span class="muted">For testing, not for personal growth.</span>
+              <button class="button secondary" aria-label="Toggle cheats panel" title="Toggle cheats panel" data-action="toggle-panel" data-panel="cheats">â–¾</button>
+            </div>
+          </div>
+          <div id="cheat-panel" class="stack compact"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div id="offline-modal" class="modal hidden" aria-hidden="true">
+    <div class="modal-card">
+      <h2>Offline Summary</h2>
+      <div id="offline-summary"></div>
+      <button id="offline-close-button" class="button">Resume Mining</button>
+    </div>
+  </div>
+
+  <div id="slot-modal" class="modal hidden" aria-hidden="true">
+    <div class="modal-card">
+      <h2>Select Install Slot</h2>
+      <p id="slot-modal-copy"></p>
+      <div id="slot-modal-options" class="stack compact"></div>
+      <button id="slot-close-button" class="button secondary">Cancel</button>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
