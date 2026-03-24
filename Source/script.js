@@ -6,13 +6,13 @@ Main architecture:
 4. Helpers keep state transitions centralized so buying, failures, repairs, offline progress, and save/load remain easy to extend.
 
 Versioning:
-- Current version starts at 1.7.10.
+- Current version starts at 1.9.1.
 - Increment the patch/build number for minor tweaks and fixes.
 - Increment the minor version number for new features.
 */
 
 const SAVE_KEY = "hash-and-crash-save-v1";
-const APP_VERSION = "1.7.10";
+const APP_VERSION = "1.9.1";
 const GAME_TICK_MS = 1000;
 const MARKET_TICK_MS = 10000;
 const POWER_TICK_MS = 30000;
@@ -20,6 +20,8 @@ const USED_MARKET_TICK_MS = 45000;
 const AUTOSAVE_MS = 15000;
 const OFFLINE_CAP_MS = 4 * 60 * 60 * 1000;
 const LOG_LIMIT = 80;
+const PERFORMANCE_HISTORY_MS = 5000;
+const PERFORMANCE_HISTORY_LIMIT = 48;
 
 const COIN_DEFS = {
   dogeish: { key: "dogeish", name: "Dogeish", currentPrice: 1.2, volatility: 0.09, trend: 0.004, baseYield: 0.14, unlockRequirement: { type: "earnings", value: 0 }, minimumPrice: 0.24, description: "The market insists it has fundamentals. The fundamentals are vibes." },
@@ -111,6 +113,27 @@ const COOLING_LEVELS = [
   { key: "chiller", name: "Rack Chiller", price: 3200, wearReduction: 0.46, powerDraw: 55, durability: 190, description: "Cold enough to justify terrible decisions." }
 ];
 
+const FEATURE_UNLOCK_DEFS = {
+  cooling: {
+    key: "cooling",
+    name: "Cooling",
+    requirement: { type: "earnings", value: 750 },
+    description: "Unlock aftermarket cooling hardware and thermal management upgrades."
+  },
+  overclocking: {
+    key: "overclocking",
+    name: "Overclocking",
+    requirement: { type: "hashrate", value: 40 },
+    description: "Unlock per-part overclock sliders for GPUs, CPUs, RAM, and PSUs."
+  },
+  marketManipulation: {
+    key: "marketManipulation",
+    name: "Market Manipulation",
+    requirement: { type: "earnings", value: 25000 },
+    description: "Reserved for future market meddling. Unlock it now, abuse it later."
+  }
+};
+
 let state = null;
 let dom = {};
 let pendingInstallAction = null;
@@ -156,6 +179,29 @@ function createEmptyExternalPowerInventory() {
     inventory[item.key] = 0;
   });
   return inventory;
+}
+
+function createInitialPerformanceHistory() {
+  return {
+    power: [],
+    hashrate: [],
+    lastRecordedAt: 0
+  };
+}
+
+function createInitialUnlockState() {
+  const featureUnlocks = {};
+  Object.keys(FEATURE_UNLOCK_DEFS).forEach((key) => {
+    featureUnlocks[key] = false;
+  });
+  const coinUnlocks = {};
+  Object.keys(COIN_DEFS).forEach((coinKey) => {
+    coinUnlocks[coinKey] = coinKey === "dogeish";
+  });
+  return {
+    features: featureUnlocks,
+    coins: coinUnlocks
+  };
 }
 
 function createSite(facilityKey, explicitId = null) {
@@ -344,6 +390,8 @@ function createInitialState() {
   return {
     cash: 120,
     lifetimeEarnings: 0,
+    unlocks: createInitialUnlockState(),
+    history: createInitialPerformanceHistory(),
     inventory,
     market,
     priceHistory,
@@ -388,6 +436,7 @@ function createInitialState() {
         usedMarket: false,
         operation: false,
         shop: false,
+        unlocks: false,
         eventLog: false,
         cheats: false
       }
@@ -646,6 +695,7 @@ function cacheDom() {
   dom.spareComponentShop = document.getElementById("spare-component-shop");
   dom.facilityShop = document.getElementById("facility-shop");
   dom.solarShop = document.getElementById("solar-shop");
+  dom.unlockPanel = document.getElementById("unlock-panel");
   dom.usedMarketPanel = document.getElementById("used-market-panel");
   dom.usedMarketTimer = document.getElementById("used-market-timer");
   dom.eventLogPanel = document.getElementById("event-log-panel");
@@ -654,6 +704,7 @@ function cacheDom() {
   dom.usedMarketSummary = document.getElementById("used-market-summary");
   dom.operationSummary = document.getElementById("operation-summary");
   dom.shopSummary = document.getElementById("shop-summary");
+  dom.unlockSummary = document.getElementById("unlock-summary");
   dom.eventLogSummary = document.getElementById("event-log-summary");
   dom.cheatSummary = document.getElementById("cheat-summary");
   dom.versionLabel = document.getElementById("version-label");
@@ -717,6 +768,25 @@ function loadGame() {
       cheats: { ...state.cheats, ...parsed.cheats },
       ui: { ...state.ui, ...parsed.ui }
     };
+    state.unlocks = {
+      ...createInitialUnlockState(),
+      ...(parsed.unlocks || {})
+    };
+    state.unlocks.features = {
+      ...createInitialUnlockState().features,
+      ...((parsed.unlocks && parsed.unlocks.features) || {})
+    };
+    state.unlocks.coins = {
+      ...createInitialUnlockState().coins,
+      ...((parsed.unlocks && parsed.unlocks.coins) || {})
+    };
+    state.history = {
+      ...createInitialPerformanceHistory(),
+      ...(parsed.history || {})
+    };
+    state.history.power = Array.isArray(state.history.power) ? state.history.power.slice(-PERFORMANCE_HISTORY_LIMIT) : [];
+    state.history.hashrate = Array.isArray(state.history.hashrate) ? state.history.hashrate.slice(-PERFORMANCE_HISTORY_LIMIT) : [];
+    state.history.lastRecordedAt = Number(state.history.lastRecordedAt) || 0;
     state.spareComponents = state.spareComponents || [];
     state.meta.nextComponentId = state.meta.nextComponentId || 1;
     state.meta.nextSiteId = state.meta.nextSiteId || 1;
@@ -783,15 +853,22 @@ function loadGame() {
       machine.faultedPartLabel = machine.faultedPartLabel || null;
       machine.siteId = machine.siteId || state.sites[0].id;
       if (machine.coolingLevel === "stock") initializeCoolingState(machine, "stock");
+      if (machine.coolingLevel !== "stock") state.unlocks.features.cooling = true;
       machine.installedGPUs.forEach((gpu) => {
         gpu.overclockPct = gpu.overclockPct || 0;
         gpu.faultCount = gpu.faultCount || 0;
+        if (getPartOverclockPct(gpu) > 0) state.unlocks.features.overclocking = true;
       });
       getInstalledComponents(machine).forEach((entry) => {
         const component = entry.component;
         component.overclockPct = component.overclockPct || 0;
         component.faultCount = component.faultCount || 0;
+        if (getPartOverclockPct(component) > 0) state.unlocks.features.overclocking = true;
       });
+      if (machine.assignedCoin && machine.assignedCoin !== "dogeish") state.unlocks.coins[machine.assignedCoin] = true;
+    });
+    Object.keys(state.inventory || {}).forEach((coinKey) => {
+      if ((state.inventory[coinKey] || 0) > 0) state.unlocks.coins[coinKey] = true;
     });
     state.ui.collapsedShopSections = { ...createInitialState().ui.collapsedShopSections, ...state.ui.collapsedShopSections };
     state.ui.collapsedComponentGroups = state.ui.collapsedComponentGroups || {};
@@ -1333,19 +1410,45 @@ function refreshUsedMarket(initial) {
 }
 
 function updateUnlocks() {
-  Object.values(COIN_DEFS).forEach((coin) => {
-    if (coin.unlockRequirement.value > 0 && isCoinUnlocked(coin.key) && !state.eventLog.some((entry) => entry.unlockKey === coin.key)) {
-      addLog(`${coin.name} unlocked. The market now offers a fresh category of regret.`, "gain", coin.key);
-    }
-  });
+  return;
 }
 
 function isCoinUnlocked(coinKey) {
-  const requirement = COIN_DEFS[coinKey].unlockRequirement;
-  if (requirement.type === "hashrate") {
-    return getInstalledHashrate() >= requirement.value;
-  }
+  return !!(state.unlocks && state.unlocks.coins && state.unlocks.coins[coinKey]);
+}
+
+function isFeatureUnlocked(featureKey) {
+  return !!(state.unlocks && state.unlocks.features && state.unlocks.features[featureKey]);
+}
+
+function isRequirementMet(requirement) {
+  if (!requirement) return true;
+  if (requirement.type === "hashrate") return getInstalledHashrate() >= requirement.value;
   return state.lifetimeEarnings >= requirement.value;
+}
+
+function getRequirementProgress(requirement) {
+  if (!requirement) return "";
+  if (requirement.type === "hashrate") {
+    return `${formatNumber(Math.min(getInstalledHashrate(), requirement.value))}/${formatNumber(requirement.value)} HR`;
+  }
+  return `${formatMoney(Math.min(state.lifetimeEarnings, requirement.value))}/${formatMoney(requirement.value)}`;
+}
+
+function formatRequirementText(requirement) {
+  if (!requirement) return "Available immediately";
+  if (requirement.type === "hashrate") return `Requires ${formatNumber(requirement.value)} HR installed hashrate`;
+  return `Requires ${formatMoney(requirement.value)} lifetime earnings`;
+}
+
+function canUnlockCoin(coinKey) {
+  const coin = COIN_DEFS[coinKey];
+  return !!coin && !isCoinUnlocked(coinKey) && isRequirementMet(coin.unlockRequirement);
+}
+
+function canUnlockFeature(featureKey) {
+  const feature = FEATURE_UNLOCK_DEFS[featureKey];
+  return !!feature && !isFeatureUnlocked(featureKey) && isRequirementMet(feature.requirement);
 }
 
 function getFacilityByKey(facilityKey) {
@@ -1546,6 +1649,14 @@ function getGpuGroupSummary(machine) {
   return parts.join(", ");
 }
 
+function getCoolingGroupSummary(machine) {
+  const cooling = getCoolingDef(machine.coolingLevel);
+  const durabilityText = machine.coolingLevel === "stock"
+    ? "Factory"
+    : `${formatPercent(getCoolingDurabilityRatio(machine))}${machine.coolingFailed ? " failed" : ""}`;
+  return `${cooling.name}, ${formatNumber(cooling.powerDraw)} W, ${durabilityText}`;
+}
+
 function getShopComponentGroupSummary(sectionKey, category) {
   if (sectionKey === "components") {
     if (category === "gpu") {
@@ -1604,6 +1715,7 @@ function canRemovePsuBay(machine, bayIndex) {
 }
 
 function renderPsuSlotChip(machine, component, slotIndex) {
+  const overclockUnlocked = isFeatureUnlocked("overclocking");
   return `
     <div class="gpu-chip ${component && component.dead ? "is-dead" : ""}">
       <div>
@@ -1614,7 +1726,7 @@ function renderPsuSlotChip(machine, component, slotIndex) {
         ? component.dead
           ? `<button class="button danger" data-action="remove-dead-component" data-machine="${machine.id}" data-category="psu" data-slot="${slotIndex}">Remove</button>`
           : `<div class="market-actions">
-              <input class="cheat-input" type="range" min="0" max="100" step="5" value="${getPartOverclockPct(component)}" data-action="set-component-oc" data-machine="${machine.id}" data-category="psu" data-slot="${slotIndex}">
+              ${overclockUnlocked ? `<input class="cheat-input" type="range" min="0" max="100" step="5" value="${getPartOverclockPct(component)}" data-action="set-component-oc" data-machine="${machine.id}" data-category="psu" data-slot="${slotIndex}">` : `<span class="muted">OC locked</span>`}
               <button class="button secondary" data-action="remove-component" data-machine="${machine.id}" data-category="psu" data-slot="${slotIndex}">Uninstall</button>
             </div>`
         : `<button class="button success" data-action="install-component-slot" data-machine="${machine.id}" data-category="psu" data-slot="${slotIndex}">Install</button>`}
@@ -1679,6 +1791,7 @@ function renderPsuBayLayout(machine, remainingBayCapacity) {
 }
 
 function renderGpuSlotChip(machine, gpu, slotIndex) {
+  const overclockUnlocked = isFeatureUnlocked("overclocking");
   return `
     <div class="gpu-chip ${gpu && gpu.dead ? "is-dead" : ""}">
       <div>
@@ -1689,10 +1802,29 @@ function renderGpuSlotChip(machine, gpu, slotIndex) {
         ? gpu.dead
           ? `<button class="button danger" data-action="remove-dead-gpu" data-machine="${machine.id}" data-gpu="${gpu.id}">Remove</button>`
           : `<div class="cheat-actions">
-              <input class="cheat-input" type="range" min="0" max="100" step="5" value="${getPartOverclockPct(gpu)}" data-action="set-gpu-oc" data-machine="${machine.id}" data-gpu="${gpu.id}">
+              ${overclockUnlocked ? `<input class="cheat-input" type="range" min="0" max="100" step="5" value="${getPartOverclockPct(gpu)}" data-action="set-gpu-oc" data-machine="${machine.id}" data-gpu="${gpu.id}">` : `<span class="muted">OC locked</span>`}
               <button class="button secondary" data-action="remove-gpu" data-machine="${machine.id}" data-gpu="${gpu.id}">Uninstall</button>
             </div>`
         : `<button class="button success" data-action="install-gpu-slot" data-machine="${machine.id}">Install</button>`}
+    </div>
+  `;
+}
+
+function renderCoolingChip(machine, coolingUnlocked, nextCooling, nextCoolingCost) {
+  const cooling = getCoolingDef(machine.coolingLevel);
+  const durabilityText = machine.coolingLevel === "stock"
+    ? "Factory"
+    : `${formatPercent(getCoolingDurabilityRatio(machine))}${machine.coolingFailed ? " failed" : ""}`;
+  return `
+    <div class="gpu-chip ${machine.coolingFailed ? "is-dead" : ""}">
+      <div>
+        <strong>${cooling.name}</strong>
+        <div class="muted">Wear reduction ${(getEffectiveCooling(machine).wearReduction * 100).toFixed(0)}% | Draw ${formatNumber(cooling.powerDraw)} W | Durability ${durabilityText}</div>
+      </div>
+      <div class="market-actions">
+        <button class="button secondary" data-action="buy-cooling" data-machine="${machine.id}" ${!coolingUnlocked || !nextCooling || state.cash < nextCoolingCost ? "disabled" : ""}>${coolingUnlocked ? (nextCooling ? `Upgrade (${formatMoney(nextCoolingCost)})` : "Maxed") : "Cooling Locked"}</button>
+        <button class="button secondary" data-action="remove-cooling" data-machine="${machine.id}" ${!coolingUnlocked || machine.coolingLevel === "stock" ? "disabled" : ""}>Remove</button>
+      </div>
     </div>
   `;
 }
@@ -2000,6 +2132,20 @@ function assignCoin(machineId, coinKey) {
   renderEventLog();
 }
 
+function unlockCoin(coinKey) {
+  if (!canUnlockCoin(coinKey)) return;
+  state.unlocks.coins[coinKey] = true;
+  addLog(`${COIN_DEFS[coinKey].name} mining rights unlocked. New speculative labor has been approved.`, "gain", coinKey);
+  renderAll();
+}
+
+function unlockFeature(featureKey) {
+  if (!canUnlockFeature(featureKey)) return;
+  state.unlocks.features[featureKey] = true;
+  addLog(`${FEATURE_UNLOCK_DEFS[featureKey].name} unlocked. Operations has acquired a fresh category of risk.`, "gain", `feature:${featureKey}`);
+  renderAll();
+}
+
 function moveMachineToSite(machineId, siteId) {
   const machine = state.machines.find((entry) => entry.id === machineId);
   const targetSite = getSiteById(siteId);
@@ -2264,6 +2410,7 @@ function getCoolingUpgradeCost(machine, coolingLevel) {
 }
 
 function buyCoolingUpgrade(machineId) {
+  if (!isFeatureUnlocked("cooling")) return;
   const machine = state.machines.find((entry) => entry.id === machineId);
   if (!machine) return;
   const currentIndex = COOLING_LEVELS.findIndex((level) => level.key === machine.coolingLevel);
@@ -2277,6 +2424,7 @@ function buyCoolingUpgrade(machineId) {
 }
 
 function removeCoolingUpgrade(machineId) {
+  if (!isFeatureUnlocked("cooling")) return;
   const machine = state.machines.find((entry) => entry.id === machineId);
   if (!machine || machine.coolingLevel === "stock") return;
   const previousCooling = getCoolingDef(machine.coolingLevel);
@@ -2286,6 +2434,7 @@ function removeCoolingUpgrade(machineId) {
 }
 
 function buyCoolingUpgradeToLevel(machineId, levelKey) {
+  if (!isFeatureUnlocked("cooling")) return;
   const machine = state.machines.find((entry) => entry.id === machineId);
   const targetLevel = COOLING_LEVELS.find((level) => level.key === levelKey);
   if (!machine || !targetLevel || levelKey === "stock") return;
@@ -2301,6 +2450,7 @@ function buyCoolingUpgradeToLevel(machineId, levelKey) {
 }
 
 function promptBuyCooling(levelKey) {
+  if (!isFeatureUnlocked("cooling")) return;
   const level = COOLING_LEVELS.find((entry) => entry.key === levelKey);
   if (!level || level.key === "stock") return;
   const eligibleMachines = state.machines.filter((machine) => {
@@ -2398,6 +2548,7 @@ function rebootMachine(machineId) {
 }
 
 function setHardwareOverclock(machineId, targetType, targetKey, pct, shouldRender = true) {
+  if (!isFeatureUnlocked("overclocking")) return;
   const machine = state.machines.find((entry) => entry.id === machineId);
   if (!machine) return;
   const safePct = clamp(Math.round(Number(pct) || 0), 0, 100);
@@ -2510,6 +2661,7 @@ function renderAll() {
   renderMarket();
   renderOperation();
   renderShop();
+  renderUnlocks();
   renderUsedMarket();
   renderEventLog();
   renderCheats();
@@ -2547,6 +2699,7 @@ function applyPanelCollapseState() {
     usedMarket: getClosestPanel("used-market-panel"),
     operation: getClosestPanel("operation-panel"),
     shop: getClosestPanel("machine-shop"),
+    unlocks: getClosestPanel("unlock-panel"),
     eventLog: getClosestPanel("event-log-panel"),
     cheats: getClosestPanel("cheat-panel")
   };
@@ -2569,6 +2722,47 @@ function applyShopSectionCollapseState() {
   });
 }
 
+function recordPerformanceSnapshot(totalPower, installedHashrate) {
+  const history = state.history || (state.history = createInitialPerformanceHistory());
+  const now = Date.now();
+  const lastPower = history.power.length ? history.power[history.power.length - 1] : null;
+  const lastHashrate = history.hashrate.length ? history.hashrate[history.hashrate.length - 1] : null;
+  const shouldRecord = !history.lastRecordedAt
+    || now - history.lastRecordedAt >= PERFORMANCE_HISTORY_MS
+    || lastPower !== totalPower
+    || lastHashrate !== installedHashrate;
+  if (!shouldRecord) return;
+  history.power.push(totalPower);
+  history.hashrate.push(installedHashrate);
+  if (history.power.length > PERFORMANCE_HISTORY_LIMIT) history.power = history.power.slice(-PERFORMANCE_HISTORY_LIMIT);
+  if (history.hashrate.length > PERFORMANCE_HISTORY_LIMIT) history.hashrate = history.hashrate.slice(-PERFORMANCE_HISTORY_LIMIT);
+  history.lastRecordedAt = now;
+}
+
+function createDualTrendSvg(primaryPoints, secondaryPoints) {
+  const width = 240;
+  const height = 56;
+  const padding = 4;
+  const pointCount = Math.max(primaryPoints.length, secondaryPoints.length);
+  if (!pointCount) return "--";
+
+  function normalize(points) {
+    const max = Math.max(...points, 1);
+    return points.map((point, index) => {
+      const x = padding + (index / Math.max(pointCount - 1, 1)) * (width - padding * 2);
+      const y = height - padding - ((point || 0) / max) * (height - padding * 2);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+  }
+
+  return `
+    <svg class="sparkline sparkline-dual" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+      <polyline class="primary" points="${normalize(primaryPoints)}"></polyline>
+      <polyline class="secondary" points="${normalize(secondaryPoints)}"></polyline>
+    </svg>
+  `;
+}
+
 function renderSummary() {
   const totalPower = state.sites.reduce((sum, site) => sum + getSiteProjectedPowerDraw(site.id), 0);
   const solarOffset = getSolarOffset();
@@ -2578,15 +2772,15 @@ function renderSummary() {
   const totalCapacity = state.sites.reduce((sum, site) => sum + getFacilityByKey(site.facilityKey).maxMachines, 0);
   const totalPowerCapacity = state.sites.reduce((sum, site) => sum + getSitePowerLimit(site.id), 0);
   const availableCapacity = totalPowerCapacity - totalPower;
+  recordPerformanceSnapshot(totalPower, installedHashrate);
+  const powerTrend = state.history && state.history.power ? state.history.power : [];
+  const hashrateTrend = state.history && state.history.hashrate ? state.history.hashrate : [];
 
   const cards = [
     ["Cash", formatMoney(state.cash), "Liquid and increasingly spoken for."],
     ["Lifetime Earnings", formatMoney(state.lifetimeEarnings), "Gross revenue, before dignity."],
     ["Installed Hashrate", `${formatNumber(installedHashrate)} HR`, "Total live silicon across all machines."],
-    ["Sites", `${state.sites.length}`, `${state.machines.length}/${totalCapacity} machine slots used across all facilities`],
-    ["Total Power", `${formatNumber(totalPower)} W`, `${availableCapacity >= 0 ? "Capacity headroom" : "Over capacity"}: ${formatNumber(Math.abs(availableCapacity))} W`],
-    ["Solar Offset", `${formatNumber(solarOffset)} W`, `Grid draw ${formatNumber(netGridPower)} W after solar`],
-    ["Billing Tick", formatMoney(powerCost), `Every ${POWER_TICK_MS / 1000}s at ${formatMoney(state.meta.powerRatePerKwTick)}/kW`]
+    ["Sites", `${state.sites.length}`, `${state.machines.length}/${totalCapacity} machine slots used across all facilities`]
   ];
 
   dom.summaryBar.innerHTML = cards.map(([label, value, subvalue]) => `
@@ -2595,12 +2789,33 @@ function renderSummary() {
       <div class="value">${value}</div>
       <div class="subvalue">${subvalue}</div>
     </div>
-  `).join("");
+  `).join("") + `
+    <div class="summary-card power-summary-card">
+      <div class="label">Power</div>
+      <div class="power-summary-layout">
+        <div class="power-summary-stats">
+          <div class="power-stat"><strong>${formatNumber(totalPower)} W</strong><span>Total draw</span></div>
+          <div class="power-stat"><strong>${formatNumber(solarOffset)} W</strong><span>Solar offset</span></div>
+          <div class="power-stat"><strong>${formatNumber(netGridPower)} W</strong><span>Grid draw</span></div>
+          <div class="power-stat"><strong>${formatMoney(powerCost)}</strong><span>Per billing tick</span></div>
+          <div class="power-stat"><strong>${formatNumber(Math.abs(availableCapacity))} W</strong><span>${availableCapacity >= 0 ? "Capacity headroom" : "Over capacity"}</span></div>
+          <div class="power-stat"><strong>${formatMoney(state.meta.powerRatePerKwTick)}</strong><span>Base power rate / kW</span></div>
+        </div>
+        <div class="power-summary-graph">
+          <div class="muted">HR vs kW trend</div>
+          ${createDualTrendSvg(hashrateTrend.map((value) => value / 100), powerTrend.map((value) => value / 1000))}
+          <div class="power-legend">
+            <span class="legend-item"><span class="legend-swatch primary"></span>Hashrate (hundreds of HR)</span>
+            <span class="legend-item"><span class="legend-swatch secondary"></span>Power (kW)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
   renderPanelSummaries();
 }
 
 function renderPanelSummaries() {
-  const unlockedCoins = Object.values(COIN_DEFS).filter((coin) => isCoinUnlocked(coin.key)).length;
   const marketValue = Object.keys(state.inventory).reduce((sum, coinKey) => sum + state.inventory[coinKey] * state.market[coinKey].price, 0);
   const marketMoves = Object.values(COIN_DEFS).reduce((totals, coin) => {
     const change = state.market[coin.key].lastChangePct;
@@ -2615,22 +2830,76 @@ function renderPanelSummaries() {
   const latestLog = state.eventLog[0] && state.eventLog[0].message ? state.eventLog[0].message : "No events yet";
   const nextFacility = getNextFacilityToBuy();
   const availableSites = getAvailableFacilityPurchases();
+  const availableUnlocks = Object.keys(FEATURE_UNLOCK_DEFS).filter(canUnlockFeature).length + Object.keys(COIN_DEFS).filter(canUnlockCoin).length;
+  const unlockedFeatures = Object.keys(FEATURE_UNLOCK_DEFS).filter(isFeatureUnlocked).length;
+  const unlockedCoins = Object.keys(COIN_DEFS).filter(isCoinUnlocked).length;
 
   dom.marketSummary.textContent = `${marketMoves.up} up, ${marketMoves.down} down, ${marketMoves.flat} flat | inv. ${formatMoney(marketValue)}`;
   dom.usedMarketSummary.textContent = `${state.usedMarketOffers.length} offers live`;
   dom.operationSummary.textContent = `${state.machines.length} machines across ${state.sites.length} sites, ${failedMachines} failed${outageSites ? `, ${outageSites} outage` : ""}`;
   dom.shopSummary.textContent = availableSites.length ? `Site options ${availableSites.length}, next ${(nextFacility && nextFacility.name) || availableSites[0].name}` : "All facility sites owned";
+  dom.unlockSummary.textContent = `${unlockedFeatures}/${Object.keys(FEATURE_UNLOCK_DEFS).length} features, ${unlockedCoins}/${Object.keys(COIN_DEFS).length} coins${availableUnlocks ? `, ${availableUnlocks} ready` : ""}`;
   dom.eventLogSummary.textContent = latestLog.length > 56 ? `${latestLog.slice(0, 53)}...` : latestLog;
   dom.cheatSummary.textContent = `Cash buttons, speed ${formatNumber(state.cheats.miningSpeedMultiplier || 1)}x`;
 }
 
 function getCoinUnlockText(coin, unlocked) {
   if (unlocked) return "Unlocked";
-  const requirement = coin.unlockRequirement;
-  if (requirement.type === "hashrate") {
-    return `Unlocks at ${formatNumber(requirement.value)} HR total hashrate`;
-  }
-  return `Unlocks at ${formatMoney(requirement.value)} lifetime earnings`;
+  if (canUnlockCoin(coin.key)) return `Ready to unlock in Unlocks`;
+  return formatRequirementText(coin.unlockRequirement);
+}
+
+function renderUnlocks() {
+  const featureCards = Object.keys(FEATURE_UNLOCK_DEFS).map((key) => {
+    const feature = FEATURE_UNLOCK_DEFS[key];
+    const unlocked = isFeatureUnlocked(key);
+    const ready = canUnlockFeature(key);
+    const implementedText = key === "marketManipulation" && unlocked ? "Unlocked, but implementation is still pending." : unlocked ? "Unlocked and operational." : ready ? "Requirement met. Click to unlock." : `${formatRequirementText(feature.requirement)} (${getRequirementProgress(feature.requirement)})`;
+    return `
+      <div class="shop-card unlock-card ${unlocked ? "is-unlocked" : ""}">
+        <div>
+          <strong>${feature.name}</strong>
+          <div class="muted">${feature.description}</div>
+          <div class="muted">${implementedText}</div>
+        </div>
+        <button class="button ${ready ? "success" : "secondary"}" data-action="unlock-feature" data-feature="${key}" ${ready ? "" : "disabled"}>${unlocked ? "Unlocked" : "Unlock"}</button>
+      </div>
+    `;
+  }).join("");
+
+  const coinCards = Object.values(COIN_DEFS).map((coin) => {
+    const unlocked = isCoinUnlocked(coin.key);
+    const ready = canUnlockCoin(coin.key);
+    const statusText = unlocked ? "Mining unlocked." : ready ? "Requirement met. Click to unlock mining." : `${formatRequirementText(coin.unlockRequirement)} (${getRequirementProgress(coin.unlockRequirement)})`;
+    return `
+      <div class="shop-card unlock-card ${unlocked ? "is-unlocked" : ""}">
+        <div>
+          <strong>${coin.name}</strong>
+          <div class="muted">${coin.description}</div>
+          <div class="muted">${statusText}</div>
+        </div>
+        <button class="button ${ready ? "success" : "secondary"}" data-action="unlock-coin" data-coin="${coin.key}" ${unlocked || !ready ? "disabled" : ""}>${unlocked ? "Unlocked" : "Unlock"}</button>
+      </div>
+    `;
+  }).join("");
+
+  dom.unlockPanel.innerHTML = `
+    <div class="unlock-section">
+      <div class="machine-section-title">Features</div>
+      <div class="stack compact">${featureCards}</div>
+    </div>
+    <div class="unlock-section">
+      <div class="machine-section-title">Mining Rights</div>
+      <div class="stack compact">${coinCards}</div>
+    </div>
+  `;
+
+  dom.unlockPanel.querySelectorAll("[data-action='unlock-feature']").forEach((button) => {
+    button.addEventListener("click", () => unlockFeature(button.dataset.feature));
+  });
+  dom.unlockPanel.querySelectorAll("[data-action='unlock-coin']").forEach((button) => {
+    button.addEventListener("click", () => unlockCoin(button.dataset.coin));
+  });
 }
 
 function renderMarket() {
@@ -2780,8 +3049,10 @@ function renderOperation() {
     const requiredPower = getMachineRequiredPower(machine);
     const psuOk = hasEnoughPsuCapacity(machine);
   const cooling = getEffectiveCooling(machine);
-  const nextCooling = COOLING_LEVELS[COOLING_LEVELS.findIndex((level) => level.key === machine.coolingLevel) + 1] || null;
-  const nextCoolingCost = nextCooling ? getCoolingUpgradeCost(machine, nextCooling) : 0;
+    const nextCooling = COOLING_LEVELS[COOLING_LEVELS.findIndex((level) => level.key === machine.coolingLevel) + 1] || null;
+    const nextCoolingCost = nextCooling ? getCoolingUpgradeCost(machine, nextCooling) : 0;
+    const coolingUnlocked = isFeatureUnlocked("cooling");
+    const overclockUnlocked = isFeatureUnlocked("overclocking");
     const totalSlots = getMachineSlotCapacity(machine);
     const enabledGpuSlots = getEnabledGpuSlotCount(machine);
     const totalRamSlots = getComponentSlotCount(machine, "ram");
@@ -2794,6 +3065,8 @@ function renderOperation() {
     const statusReason = getMachineStatusReason(machine);
     const gpuGroupCollapsed = !!state.ui.collapsedComponentGroups[`${machine.id}:gpu`];
     const gpuGroupSummary = getGpuGroupSummary(machine);
+    const coolingGroupCollapsed = !!state.ui.collapsedComponentGroups[`${machine.id}:cooling`];
+    const coolingGroupSummary = getCoolingGroupSummary(machine);
     const remainingBayCapacity = Math.max(0, def.maxPsuBayCount - (machine.psuBays || []).length);
     const coinOptions = Object.values(COIN_DEFS)
       .filter((coin) => isCoinUnlocked(coin.key))
@@ -2831,8 +3104,6 @@ function renderOperation() {
               ${siteOptions}
             </select>
           </label>
-          <button class="button secondary" data-action="buy-cooling" data-machine="${machine.id}" ${!nextCooling || state.cash < nextCoolingCost ? "disabled" : ""}>${nextCooling ? `Cooling: ${nextCooling.name} (${formatMoney(nextCoolingCost)})` : cooling.name}</button>
-          <button class="button secondary" data-action="remove-cooling" data-machine="${machine.id}" ${machine.coolingLevel === "stock" ? "disabled" : ""}>Remove Cooling</button>
           <button class="button success" data-action="reboot-machine" data-machine="${machine.id}" ${machine.status !== "faulted" ? "disabled" : ""}>Reboot</button>
           <button class="button" data-action="repair-machine" data-machine="${machine.id}" ${!canRepairMachine(machine) || state.cash < repairCost ? "disabled" : ""}>Repair (${formatMoney(repairCost)})</button>
         </div>
@@ -2848,6 +3119,18 @@ function renderOperation() {
         <div class="machine-section">
           <div class="machine-section-title">Main Components</div>
           <div class="component-group-list">
+            <div class="component-group ${coolingGroupCollapsed ? "is-collapsed" : ""}">
+              <div class="component-group-header">
+                <div>
+                  <strong>Cooling</strong>
+                  <div class="muted">${coolingGroupSummary}</div>
+                </div>
+                <button class="button secondary" aria-label="Toggle cooling group" title="Toggle cooling group" data-action="toggle-component-group" data-machine="${machine.id}" data-category="cooling">${getToggleSymbol(coolingGroupCollapsed)}</button>
+              </div>
+              <div class="machine-gpu-list component-group-body">
+                ${renderCoolingChip(machine, coolingUnlocked, nextCooling, nextCoolingCost)}
+              </div>
+            </div>
             ${componentGroups.map((group) => `
               <div class="component-group ${group.collapsed ? "is-collapsed" : ""}">
                 <div class="component-group-header">
@@ -2870,7 +3153,7 @@ function renderOperation() {
                             ? component.dead
                               ? `<button class="button danger" data-action="remove-dead-component" data-machine="${machine.id}" data-category="${category}" data-slot="${slotIndex}">Remove</button>`
                               : `<div class="market-actions">
-                                  ${category === "cpu" || category === "ram" ? `<input class="cheat-input" type="range" min="0" max="100" step="5" value="${getPartOverclockPct(component)}" data-action="set-component-oc" data-machine="${machine.id}" data-category="${category}" data-slot="${slotIndex}">` : ""}
+                                  ${category === "cpu" || category === "ram" ? (overclockUnlocked ? `<input class="cheat-input" type="range" min="0" max="100" step="5" value="${getPartOverclockPct(component)}" data-action="set-component-oc" data-machine="${machine.id}" data-category="${category}" data-slot="${slotIndex}">` : `<span class="muted">OC locked</span>`) : ""}
                                   <button class="button secondary" data-action="remove-component" data-machine="${machine.id}" data-category="${category}" data-slot="${slotIndex}">Uninstall</button>
                                 </div>`
                             : `<button class="button success" data-action="install-component-slot" data-machine="${machine.id}" data-category="${category}" data-slot="${slotIndex}">Install</button>`}
@@ -2993,6 +3276,7 @@ function renderOperation() {
 function renderShop() {
   const freeSlotAvailable = hasFreeGpuSlot();
   const sitesWithCapacity = getSitesWithCapacity();
+  const coolingUnlocked = isFeatureUnlocked("cooling");
   dom.machineShop.innerHTML = Object.values(MACHINE_DEFS).map((machine) => `
     <div class="shop-card">
       <div>
@@ -3030,10 +3314,11 @@ function renderShop() {
               </div>
               <div>
                 <div><strong>${formatMoney(level.price)}</strong></div>
-                <button class="button" data-action="buy-cooling-shop" data-cooling="${level.key}">Buy</button>
+                <button class="button" data-action="buy-cooling-shop" data-cooling="${level.key}" ${!coolingUnlocked ? "disabled" : ""}>${coolingUnlocked ? "Buy" : "Locked"}</button>
               </div>
             </div>
           `).join("")}
+          ${!coolingUnlocked ? `<div class="empty-state">Cooling is locked. Unlock it first to buy these upgrades.</div>` : ""}
         </div>
       </div>
       `;
@@ -3555,7 +3840,7 @@ function renderCheats() {
     <div class="cheat-row">
       <div>
         <strong>Market Debug</strong>
-        <div class="muted">Reveal internal coin volatility and drift in the Market panel.</div>
+        <div class="muted">Reveal internal coin volatility and drift in the Coin Market panel.</div>
       </div>
       <div class="cheat-actions">
         <button class="button ${showVolatility ? "" : "secondary"}" data-action="toggle-volatility-cheat">${showVolatility ? "Hide Volatility" : "Show Volatility"}</button>

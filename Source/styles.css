@@ -112,6 +112,10 @@ select {
   padding: 16px;
 }
 
+.power-summary-card {
+  grid-column: span 2;
+}
+
 .summary-card .label {
   font-size: 0.84rem;
   color: var(--muted);
@@ -129,6 +133,87 @@ select {
   margin-top: 4px;
   color: var(--muted);
   font-size: 0.92rem;
+}
+
+.power-summary-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(220px, 1fr);
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.power-summary-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.power-stat {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--panel-alt);
+  border: 1px solid var(--line);
+}
+
+.power-stat span {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.power-summary-graph {
+  display: grid;
+  gap: 8px;
+}
+
+.sparkline-dual {
+  height: 56px;
+}
+
+.sparkline-dual .primary,
+.sparkline-dual .secondary {
+  fill: none;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sparkline-dual .primary {
+  stroke: var(--gain);
+}
+
+.sparkline-dual .secondary {
+  stroke: var(--accent);
+}
+
+.power-legend {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.legend-swatch.primary {
+  background: var(--gain);
+}
+
+.legend-swatch.secondary {
+  background: var(--accent);
 }
 
 .dashboard-grid {
@@ -370,6 +455,19 @@ input[type="range"].cheat-input {
 .shop-card,
 .used-card {
   align-items: flex-start;
+}
+
+.unlock-section {
+  display: grid;
+  gap: 10px;
+}
+
+.unlock-card.is-unlocked {
+  border-color: rgba(29, 127, 78, 0.4);
+}
+
+[data-theme="dark"] .unlock-card.is-unlocked {
+  border-color: rgba(86, 201, 138, 0.38);
 }
 
 .shop-section + .shop-section {
@@ -663,6 +761,14 @@ select {
 
 @media (max-width: 1080px) {
   .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .power-summary-card {
+    grid-column: span 1;
+  }
+
+  .power-summary-layout {
     grid-template-columns: 1fr;
   }
 
